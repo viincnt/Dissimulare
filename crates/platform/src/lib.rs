@@ -19,9 +19,14 @@ mod windows_impl;
 #[cfg(target_os = "windows")]
 use windows_impl::{WindowsCertStore, WindowsSystemProxy};
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod macos_impl;
+#[cfg(target_os = "macos")]
+use macos_impl::{MacOsCertStore, MacOsSystemProxy};
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod unsupported_impl;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use unsupported_impl::{UnsupportedCertStore, UnsupportedSystemProxy};
 
 /// Returns the [`CertStore`] implementation for the current platform.
@@ -30,7 +35,11 @@ pub fn cert_store() -> Box<dyn CertStore> {
     {
         Box::new(WindowsCertStore::new())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(MacOsCertStore::new())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Box::new(UnsupportedCertStore)
     }
@@ -42,7 +51,11 @@ pub fn system_proxy() -> Box<dyn SystemProxy> {
     {
         Box::new(WindowsSystemProxy::new())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(MacOsSystemProxy::new())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Box::new(UnsupportedSystemProxy)
     }

@@ -3,14 +3,11 @@ use crate::system_proxy::{Result as ProxyResult, SystemProxy, SystemProxyError};
 use std::net::SocketAddr;
 
 /// Placeholder used on any platform without a dedicated implementation yet
-/// (everything except Windows, for now).
+/// (everything except Windows and macOS, for now — e.g. Linux).
 ///
-/// To add macOS support: create a `macos_impl.rs` implementing `CertStore`
-/// via `security-framework`/`security add-trusted-cert` (per-user login
-/// keychain, not the System keychain, to keep parity with the no-elevation
-/// rule) and `SystemProxy` via `networksetup -setwebproxy` /
-/// `-setsecurewebproxy`, then wire both in from `lib.rs` the same way the
-/// Windows module is wired in.
+/// To add support for another OS: create a new `<os>_impl.rs` implementing
+/// `CertStore` and `SystemProxy`, then wire both in from `lib.rs` the same
+/// way the Windows and macOS modules are wired in.
 pub struct UnsupportedCertStore;
 pub struct UnsupportedSystemProxy;
 

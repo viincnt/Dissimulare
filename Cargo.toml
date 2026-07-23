@@ -6,6 +6,7 @@ members = [
     "crates/filters",
     "crates/core",
     "crates/cli",
+    "crates/tui",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ dissimulare-platform = { path = "crates/platform" }
 dissimulare-ca = { path = "crates/ca" }
 dissimulare-filters = { path = "crates/filters" }
 dissimulare-core = { path = "crates/core" }
+dissimulare-cli = { path = "crates/cli" }
 
 anyhow = "1"
 thiserror = "2"
@@ -45,3 +47,5 @@ adblock = "0.13"
 rcgen = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
+ratatui = "0.30"
+crossterm = "0.29"

@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20(macOS%20planned)-8b2fc9?style=for-the-badge&logo=windows&logoColor=white&labelColor=1a1b26" />
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-8b2fc9?style=for-the-badge&logo=apple&logoColor=white&labelColor=1a1b26" />
   <img alt="rust" src="https://img.shields.io/badge/Rust-stable-8b2fc9?style=for-the-badge&logo=rust&logoColor=white&labelColor=1a1b26" />
   <img alt="status" src="https://img.shields.io/badge/status-active%20development-8b2fc9?style=for-the-badge&labelColor=1a1b26" />
   <img alt="mitm" src="https://img.shields.io/badge/does%20MITM%20its%20own%20traffic-on%20purpose-8b2fc9?style=for-the-badge&labelColor=1a1b26" />
@@ -42,7 +42,7 @@ Most privacy tools try to make you look like everyone else. Dissimulare doesn't 
 >
 > What I *do* commit to:
 > - It only ever intercepts **your own traffic, on your own machine**, because you asked it to.
-> - The root CA it generates is installed **only for your current Windows user account** (`CurrentUser\Root`), never system-wide, never requiring admin elevation.
+> - The root CA it generates is installed **only for your current user account** (`CurrentUser\Root` on Windows, the login keychain on macOS), never system-wide, never requiring admin elevation.
 > - Nothing is installed without you typing `I AGREE` at an explicit, unskippable consent screen that says exactly what's about to happen.
 > - `dissimulare uninstall` removes the CA and reverts your system proxy settings in one command — no leftover trust anchors.
 
@@ -78,13 +78,14 @@ Dissimulare is early — the core proxy pipeline works end-to-end, but it hasn't
 
 | Crate                 | Status | Role                                                              |
 | ---------------------- | :----: | ------------------------------------------------------------------ |
-| `dissimulare-platform` | 🟢 | OS integration only — cert store & system proxy, Windows implemented |
+| `dissimulare-platform` | 🟢 | OS integration only — cert store & system proxy, Windows + macOS implemented |
 | `dissimulare-ca`       | 🟢 | Root CA generation, persistence, and trust-store lifecycle          |
 | `dissimulare-filters`  | 🟢 | `adblock-rust` wrapper — list fetch/cache/refresh, block decisions  |
 | `dissimulare-core`     | 🟢 | The proxy pipeline itself, including chaos-mode identity + injection |
 | `dissimulare-cli`      | 🟢 | `setup` / `run` / `status` / `uninstall`                            |
-| GUI / system tray      | ⚪ | Not started — CLI only for now                                     |
-| macOS support          | ⚪ | Planned; only `dissimulare-platform` should need new code           |
+| `dissimulare-tui`      | 🟢 | `ratatui` menu + live-stats dashboard — a thin front-end that only calls into `dissimulare-cli`, no logic of its own |
+| GUI / system tray      | ⚪ | Not started                                                         |
+| macOS support          | 🟢 | `dissimulare-platform` now has a macOS implementation (login keychain + `networksetup`) |
 
 ---
 
@@ -99,6 +100,8 @@ cargo run -p dissimulare-cli -- run     # start the proxy
 
 `setup` will not touch your certificate store until you type `I AGREE` at its consent prompt. See [Building](#-building) for platform requirements.
 
+Prefer a menu over flags? `cargo run -p dissimulare-tui` gives you the same `setup`/`run`/`status`/`uninstall` flow from an arrow-key menu, plus a live dashboard (request/blocked counters, uptime) while the proxy is running. It's a pure front-end: every action is the exact same `dissimulare-cli` function the plain binary calls, so the two never drift apart.
+
 ---
 
 # 🏗 Architecture
@@ -106,6 +109,7 @@ cargo run -p dissimulare-cli -- run     # start the proxy
 ```mermaid
 flowchart TD
 
+TUI[dissimulare-tui]
 CLI[dissimulare-cli]
 CORE[dissimulare-core]
 FILTERS[dissimulare-filters]
@@ -116,6 +120,9 @@ HUD[hudsucker]
 ADB[adblock-rust]
 RCGEN[rcgen]
 WIN["Windows: schannel / winreg / windows-rs"]
+MAC["macOS: security(1) / networksetup(1)"]
+
+TUI --> CLI
 
 CLI --> CORE
 CLI --> CA
@@ -127,6 +134,7 @@ CORE --> FILTERS
 CA --> RCGEN
 CA --> PLATFORM
 PLATFORM --> WIN
+PLATFORM --> MAC
 ```
 
 ### Stack
@@ -138,15 +146,20 @@ PLATFORM --> WIN
 | Root CA generation        | `rcgen`                               |
 | Async runtime             | `tokio`                               |
 | OS trust store (Windows)  | `schannel` + `windows`                |
+| OS trust store (macOS)    | `security(1)` (login keychain)        |
 | System proxy (Windows)    | WinINet + registry                    |
+| System proxy (macOS)      | `networksetup(1)`                     |
 | CLI                       | `clap`                                |
+| TUI                       | `ratatui` + `crossterm`               |
 
 <details>
 <summary><strong>Architecture details</strong></summary>
 
-`dissimulare-platform` is the only crate allowed to contain `#[cfg(target_os = "windows")]` code, hidden behind two traits: `CertStore` (install/remove/query the root CA) and `SystemProxy` (point the OS at the proxy and back). Every Windows-specific call — Crypt32 cert-store operations via `schannel`, registry writes via `winreg`, WinINet refresh via `windows` — lives in one file. Porting to macOS means adding one new implementation of those two traits; nothing else in the workspace should need to change.
+`dissimulare-platform` is the only crate allowed to contain `#[cfg(target_os = "...")]` code, hidden behind two traits: `CertStore` (install/remove/query the root CA) and `SystemProxy` (point the OS at the proxy and back). Every Windows-specific call — Crypt32 cert-store operations via `schannel`, registry writes via `winreg`, WinINet refresh via `windows` — lives in `windows_impl.rs`. The macOS implementation (`macos_impl.rs`) shells out to `security add-trusted-cert`/`delete-certificate`/`find-certificate` against the current user's login keychain (never the System keychain, so no admin password is required) and to `networksetup` to point every active network service's web proxy at the local proxy. Porting to a further OS means adding one new implementation of those two traits; nothing else in the workspace should need to change.
 
 `adblock-rust`'s `Engine` uses `Rc`/`RefCell` internally and is neither `Send` nor `Sync`, which is incompatible with `hudsucker::HttpHandler`'s trait bounds. Rather than fight that, `dissimulare-filters::FilterService` runs the engine on one dedicated OS thread and talks to it over a channel — the engine itself never crosses a thread boundary.
+
+`dissimulare-cli` builds both a library (`dissimulare_cli`) and the `dissimulare` binary; `main.rs` is a thin `clap` wrapper around `commands::{setup, run, status, uninstall}`. `dissimulare-tui` depends on that same library and calls those same functions — `setup`/`status`/`uninstall` print straight to the terminal exactly as they do for the plain binary (the TUI just steps out of the alternate screen for the duration of the call), and `run` is split into `start` (returns a `RunningProxy` handle immediately instead of blocking on Ctrl-C) and `stop` (signals shutdown, reverts the system proxy, returns the final stats), so the TUI's dashboard can poll live stats and trigger shutdown from a keypress instead of a Unix signal. No proxy/CA/filter logic is duplicated in the TUI.
 
 </details>
 
@@ -158,9 +171,9 @@ PLATFORM --> WIN
 - [ ] Cosmetic filtering (CSS-level element hiding for first-party-rendered ads, via `adblock-rust`'s cosmetic filter support)
 - [ ] `$redirect=` resource substitution using uBlock's resource library, for cleaner no-op stand-ins than the current generic blocks
 - [ ] System tray GUI
-- [ ] TUI (`ratatui`) as a lighter-weight alternative to the GUI
+- [x] TUI (`ratatui`) as a lighter-weight alternative to the GUI
 - [ ] Microsoft Store packaging (MSIX)
-- [ ] macOS port
+- [ ] macOS packaging (signed/notarized `.app` + Homebrew tap)
 
 ---
 
@@ -169,7 +182,8 @@ PLATFORM --> WIN
 Requirements:
 
 - Rust (stable channel)
-- **Windows only, for now:** the MSVC C++ build tools and Windows 10/11 SDK — install via the Visual Studio Installer with the "Desktop development with C++" workload if `cargo build` fails to find `link.exe`
+- **Windows:** the MSVC C++ build tools and Windows 10/11 SDK — install via the Visual Studio Installer with the "Desktop development with C++" workload if `cargo build` fails to find `link.exe`
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`) so the `security` and `networksetup` binaries (and a C toolchain for native dependencies) are available. No extra elevation is needed — the CA is trusted in your login keychain, not the System keychain.
 
 ```sh
 git clone https://github.com/viincnt/Dissimulare.git

@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Dissimulare command-line interface: setup/run/status/uninstall."
 
+[lib]
+name = "dissimulare_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dissimulare"
 path = "src/main.rs"

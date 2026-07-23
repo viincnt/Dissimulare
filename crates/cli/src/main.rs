@@ -1,10 +1,6 @@
-mod cli;
-mod commands;
-mod config;
-mod seed;
-
 use clap::Parser;
-use cli::{Cli, Command};
+use dissimulare_cli::cli::{Cli, Command};
+use dissimulare_cli::commands;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

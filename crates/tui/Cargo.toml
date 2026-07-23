@@ -1,0 +1,23 @@
+[package]
+name = "dissimulare-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Terminal UI front-end for Dissimulare. Pure presentation: every action is a call into dissimulare-cli's setup/start/status/uninstall, never reimplemented here."
+
+[[bin]]
+name = "dissimulare-tui"
+path = "src/main.rs"
+
+[dependencies]
+dissimulare-cli = { workspace = true }
+dissimulare-platform = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }

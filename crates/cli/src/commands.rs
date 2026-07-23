@@ -2,11 +2,12 @@ use crate::config::AppConfig;
 use crate::seed::load_or_generate_chaos_seed;
 use anyhow::{bail, Context, Result};
 use dissimulare_ca::RootCa;
-use dissimulare_core::{DissimulareHandler, Stats};
+use dissimulare_core::{DissimulareHandler, Stats, StatsSnapshot};
 use dissimulare_filters::{FilterManager, FilterService};
 use dissimulare_platform::{system_proxy, AppPaths};
 use hudsucker::rustls::crypto::aws_lc_rs;
 use std::io::Write;
+use std::net::SocketAddr;
 
 pub async fn setup() -> Result<()> {
     let paths = AppPaths::new()?;
@@ -52,7 +53,42 @@ pub async fn setup() -> Result<()> {
     Ok(())
 }
 
-pub async fn run(set_system_proxy_override: Option<bool>) -> Result<()> {
+/// A proxy started via [`start`], running in the background until [`stop`]
+/// is called. Splitting this out of [`run`] lets a caller drive its own
+/// event loop (e.g. a TUI dashboard polling `stats`) instead of being stuck
+/// waiting on Ctrl-C inside this function.
+pub struct RunningProxy {
+    pub stats: Stats,
+    pub listen_addr: SocketAddr,
+    set_system_proxy: bool,
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    proxy_task: tokio::task::JoinHandle<()>,
+}
+
+impl RunningProxy {
+    /// Signals the proxy to shut down, waits for it to finish, and reverts
+    /// the system proxy settings if this run enabled them. Returns the
+    /// final stats snapshot.
+    pub async fn stop(self) -> StatsSnapshot {
+        let _ = self.shutdown_tx.send(());
+        let _ = self.proxy_task.await;
+
+        if self.set_system_proxy {
+            if let Err(err) = system_proxy().disable() {
+                tracing::warn!(error = %err, "failed to disable the system proxy on shutdown");
+            } else {
+                tracing::info!("system proxy disabled");
+            }
+        }
+
+        self.stats.snapshot()
+    }
+}
+
+/// Builds and starts the proxy (installing the system proxy if configured),
+/// returning immediately with a handle instead of waiting for a shutdown
+/// signal — callers decide how they want to be told to stop.
+pub async fn start(set_system_proxy_override: Option<bool>) -> Result<RunningProxy> {
     let paths = AppPaths::new()?;
     paths.ensure_dirs()?;
     let config = AppConfig::load_or_default(&paths)?;
@@ -100,22 +136,26 @@ pub async fn run(set_system_proxy_override: Option<bool>) -> Result<()> {
     }
 
     tracing::info!(%listen_addr, "Dissimulare proxy listening");
-    let proxy_task = tokio::spawn(proxy.start());
+    let proxy_task = tokio::spawn(async move {
+        let _ = proxy.start().await;
+    });
+
+    Ok(RunningProxy {
+        stats,
+        listen_addr,
+        set_system_proxy,
+        shutdown_tx,
+        proxy_task,
+    })
+}
+
+pub async fn run(set_system_proxy_override: Option<bool>) -> Result<()> {
+    let running = start(set_system_proxy_override).await?;
 
     tokio::signal::ctrl_c().await.context("waiting for ctrl-c")?;
     tracing::info!("shutting down");
-    let _ = shutdown_tx.send(());
-    let _ = proxy_task.await;
 
-    if set_system_proxy {
-        if let Err(err) = system_proxy().disable() {
-            tracing::warn!(error = %err, "failed to disable the system proxy on shutdown");
-        } else {
-            tracing::info!("system proxy disabled");
-        }
-    }
-
-    let snapshot = stats.snapshot();
+    let snapshot = running.stop().await;
     tracing::info!(
         total_requests = snapshot.total_requests,
         blocked_requests = snapshot.blocked_requests,
@@ -185,8 +225,8 @@ fn print_consent_notice(thumbprint: &str) {
     println!(" so it can inspect and rewrite your own HTTPS traffic, in order to");
     println!(" block ads/trackers and normalize fingerprinting-related headers.");
     println!();
-    println!(" This certificate is trusted ONLY for your current Windows user");
-    println!(" account (never system-wide), and Dissimulare uses it solely to");
+    println!(" This certificate is trusted ONLY for your current user account");
+    println!(" (never system-wide), and Dissimulare uses it solely to");
     println!(" decrypt and re-encrypt HTTPS connections made from this device.");
     println!();
     println!(" SHA-1 thumbprint: {thumbprint}");
