@@ -9,6 +9,15 @@ use hudsucker::rustls::crypto::aws_lc_rs;
 use std::io::Write;
 use std::net::SocketAddr;
 
+/// Whether the local root CA is currently trusted by the OS. Front-ends
+/// (e.g. the TUI) use this to decide whether `setup` still needs to run,
+/// instead of duplicating any CA logic themselves.
+pub fn ca_installed() -> Result<bool> {
+    let paths = AppPaths::new()?;
+    let root_ca = RootCa::load_or_generate(&paths)?;
+    root_ca.is_installed()
+}
+
 pub async fn setup() -> Result<()> {
     let paths = AppPaths::new()?;
     paths.ensure_dirs()?;

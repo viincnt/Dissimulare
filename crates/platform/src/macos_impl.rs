@@ -80,8 +80,10 @@ impl CertStore for MacOsCertStore {
 
     fn is_installed(&self, sha1_thumbprint: &str) -> CertResult<bool> {
         let keychain = login_keychain()?;
+        // Unlike `add-trusted-cert`/`delete-certificate`, `find-certificate`
+        // has no `-k` flag — the keychain is a positional argument.
         let output = Command::new("security")
-            .args(["find-certificate", "-a", "-Z", "-k"])
+            .args(["find-certificate", "-a", "-Z"])
             .arg(&keychain)
             .output()
             .map_err(CertStoreError::Io)?;
@@ -93,6 +95,41 @@ impl CertStore for MacOsCertStore {
         let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
         let needle = format!("sha-1 hash: {}", sha1_thumbprint.to_ascii_lowercase());
         Ok(stdout.contains(&needle))
+    }
+
+    fn prune_stale(&self, common_name: &str, keep_thumbprint: &str) -> CertResult<()> {
+        let keychain = login_keychain()?;
+        // `-c` filters by (sub)string match on the certificate's name
+        // fields, so this only ever considers certs that look like ours.
+        let output = Command::new("security")
+            .args(["find-certificate", "-a", "-c", common_name, "-Z"])
+            .arg(&keychain)
+            .output()
+            .map_err(CertStoreError::Io)?;
+
+        if !output.status.success() {
+            // No matches (or nothing to prune) isn't a failure.
+            return Ok(());
+        }
+
+        let keep = keep_thumbprint.to_ascii_lowercase();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let Some(hash) = line.trim().strip_prefix("SHA-1 hash: ") else {
+                continue;
+            };
+            if hash.eq_ignore_ascii_case(&keep) {
+                continue;
+            }
+            // Best-effort: an orphaned old CA shouldn't block installing
+            // the current one.
+            let _ = Command::new("security")
+                .args(["delete-certificate", "-Z", hash, "-t"])
+                .arg(&keychain)
+                .output();
+        }
+
+        Ok(())
     }
 }
 

@@ -71,6 +71,37 @@ impl CertStore for WindowsCertStore {
         }
         Ok(false)
     }
+
+    fn prune_stale(&self, common_name: &str, keep_thumbprint: &str) -> CertResult<()> {
+        let store = SchannelStore::open_current_user(ROOT_STORE_NAME)?;
+        let keep = keep_thumbprint.to_ascii_lowercase();
+        let needle = common_name.as_bytes();
+
+        for cert in store.certs() {
+            // `schannel` doesn't expose subject/CN parsing, but the DER
+            // encoding of an X.509 Name attribute embeds the string's raw
+            // bytes verbatim, so a substring search over the encoded
+            // certificate is enough to recognize "one of ours".
+            let looks_like_ours = cert.to_der().windows(needle.len()).any(|w| w == needle);
+            if !looks_like_ours {
+                continue;
+            }
+
+            let is_current = cert
+                .fingerprint(HashAlgorithm::sha1())
+                .map(|h| to_hex(&h) == keep)
+                .unwrap_or(false);
+            if is_current {
+                continue;
+            }
+
+            // Best-effort: an orphaned old CA shouldn't block installing
+            // the current one.
+            let _ = cert.delete();
+        }
+
+        Ok(())
+    }
 }
 
 /// Points the per-user WinINet proxy settings (the ones Edge/Chrome/most

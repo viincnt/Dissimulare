@@ -23,6 +23,10 @@ impl CertStore for UnsupportedCertStore {
     fn is_installed(&self, _sha1_thumbprint: &str) -> CertResult<bool> {
         Err(CertStoreError::Unsupported)
     }
+
+    fn prune_stale(&self, _common_name: &str, _keep_thumbprint: &str) -> CertResult<()> {
+        Err(CertStoreError::Unsupported)
+    }
 }
 
 impl SystemProxy for UnsupportedSystemProxy {

@@ -10,6 +10,11 @@ use hudsucker::rustls::crypto::aws_lc_rs;
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair};
 use sha1::{Digest, Sha1};
 
+/// The CA's Common Name, constant across every generation — used both to
+/// build the certificate and to recognize/prune stale copies of it in the
+/// OS trust store (see [`RootCa::install`]).
+pub const CA_COMMON_NAME: &str = "Dissimulare Local CA";
+
 /// The app's persisted root CA: same key material every run, so the
 /// certificate the user trusted on setup keeps working across restarts.
 pub struct RootCa {
@@ -81,8 +86,18 @@ impl RootCa {
 
     /// Installs this CA as a trusted root for the current user. Never
     /// requires admin/root elevation (see `dissimulare-platform::CertStore`).
+    ///
+    /// Also prunes any other CA sharing [`CA_COMMON_NAME`] but a different
+    /// thumbprint — an orphan left behind if the local CA material was ever
+    /// regenerated (e.g. the app's data directory was wiped) without going
+    /// through [`RootCa::uninstall`] first. Pruning is best-effort: it's
+    /// logged on failure but never blocks installing the current CA.
     pub fn install(&self) -> Result<()> {
-        cert_store()
+        let store = cert_store();
+        if let Err(err) = store.prune_stale(CA_COMMON_NAME, &self.thumbprint) {
+            tracing::warn!(error = %err, "could not remove stale CA trust entries");
+        }
+        store
             .install_root_ca(&self.der)
             .context("failed to install the CA into the system certificate store")
     }
@@ -109,7 +124,7 @@ fn generate_root_ca() -> Result<(String, String, Vec<u8>)> {
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
 
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "Dissimulare Local CA");
+    dn.push(DnType::CommonName, CA_COMMON_NAME);
     dn.push(DnType::OrganizationName, "Dissimulare");
     params.distinguished_name = dn;
 

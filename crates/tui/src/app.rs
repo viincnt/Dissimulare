@@ -4,9 +4,17 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use dissimulare_cli::commands::{self, RunningProxy};
 use std::time::{Duration, Instant};
 
-/// (label, description) shown in the menu, in display order.
-pub const MENU_ITEMS: &[(&str, &str)] = &[
+/// Menu shown before the CA is trusted: `setup` is the only thing that
+/// makes sense to offer, since `Run` would just refuse to start and
+/// `Status`/`Uninstall` have nothing to act on yet.
+const MENU_ITEMS_NO_CA: &[(&str, &str)] = &[
     ("Setup", "Generate/trust the local CA and download filter lists"),
+    ("Quit", "Exit"),
+];
+
+/// Menu shown once the CA is trusted: `Setup` drops out (it's already
+/// done) and the rest of the day-to-day commands take over.
+const MENU_ITEMS_WITH_CA: &[(&str, &str)] = &[
     ("Run", "Start the proxy and watch live stats"),
     ("Status", "Show CA trust state and cached filter lists"),
     ("Uninstall", "Remove the CA and clear system proxy settings"),
@@ -24,6 +32,7 @@ pub struct App {
     pub message: Option<String>,
     pub running: Option<RunningProxy>,
     pub started_at: Option<Instant>,
+    ca_installed: bool,
 }
 
 impl App {
@@ -34,6 +43,29 @@ impl App {
             message: None,
             running: None,
             started_at: None,
+            // A failed check is treated the same as "not installed": the
+            // worst case is Setup runs again, which is harmless and
+            // idempotent, rather than hiding it when it might be needed.
+            ca_installed: commands::ca_installed().unwrap_or(false),
+        }
+    }
+
+    pub fn menu_items(&self) -> &'static [(&'static str, &'static str)] {
+        if self.ca_installed {
+            MENU_ITEMS_WITH_CA
+        } else {
+            MENU_ITEMS_NO_CA
+        }
+    }
+
+    /// Re-checks whether the CA is trusted and, if that flips which menu
+    /// applies, snaps the selection back to the top so it can't end up
+    /// pointing past the end of a shorter list.
+    fn refresh_ca_state(&mut self) {
+        let now_installed = commands::ca_installed().unwrap_or(self.ca_installed);
+        if now_installed != self.ca_installed {
+            self.ca_installed = now_installed;
+            self.menu_index = 0;
         }
     }
 
@@ -73,21 +105,18 @@ impl App {
     }
 
     async fn handle_menu_key(&mut self, code: KeyCode, term: &mut Term) -> Result<bool> {
+        let item_count = self.menu_items().len();
         match code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.menu_index = if self.menu_index == 0 {
-                    MENU_ITEMS.len() - 1
-                } else {
-                    self.menu_index - 1
-                };
+                self.menu_index = if self.menu_index == 0 { item_count - 1 } else { self.menu_index - 1 };
                 self.message = None;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.menu_index = (self.menu_index + 1) % MENU_ITEMS.len();
+                self.menu_index = (self.menu_index + 1) % item_count;
                 self.message = None;
             }
             KeyCode::Enter => {
-                let selected = MENU_ITEMS[self.menu_index].0;
+                let selected = self.menu_items()[self.menu_index].0;
                 if selected == "Quit" {
                     return Ok(false);
                 }
@@ -127,6 +156,7 @@ impl App {
                 let message = finish_plain_command("Setup", result);
                 resume(term)?;
                 self.message = Some(message);
+                self.refresh_ca_state();
             }
             "Status" => {
                 suspend(term)?;
@@ -141,6 +171,7 @@ impl App {
                 let message = finish_plain_command("Uninstall", result);
                 resume(term)?;
                 self.message = Some(message);
+                self.refresh_ca_state();
             }
             "Run" => {
                 self.message = Some("Starting proxy…".to_string());

@@ -1,4 +1,4 @@
-use crate::app::{App, Screen, MENU_ITEMS};
+use crate::app::{App, Screen};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -23,7 +23,8 @@ fn draw_menu(frame: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, chunks[0]);
 
-    let items: Vec<ListItem> = MENU_ITEMS
+    let items: Vec<ListItem> = app
+        .menu_items()
         .iter()
         .enumerate()
         .map(|(i, (name, desc))| {

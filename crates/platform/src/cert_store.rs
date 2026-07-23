@@ -30,4 +30,14 @@ pub trait CertStore: Send + Sync {
 
     /// Returns whether a root CA with the given thumbprint is currently trusted.
     fn is_installed(&self, sha1_thumbprint: &str) -> Result<bool>;
+
+    /// Removes any trusted root CA whose subject contains `common_name` but
+    /// whose SHA-1 thumbprint isn't `keep_thumbprint`. Cleans up orphaned
+    /// trust anchors left behind when the local CA material is regenerated
+    /// (e.g. the app's data directory was wiped) without going through
+    /// `uninstall_root_ca` first — otherwise every regeneration would add a
+    /// new trusted CA next to the old one instead of replacing it. Best
+    /// effort: failing to remove a stale entry should not block installing
+    /// the current one.
+    fn prune_stale(&self, common_name: &str, keep_thumbprint: &str) -> Result<()>;
 }
