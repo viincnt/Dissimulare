@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/platform",
+    "crates/ca",
+    "crates/filters",
+    "crates/core",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Dissimulare contributors"]
+license = "MIT"
+repository = "https://github.com/viincnt/dissimulare"
+rust-version = "1.75"
+
+[workspace.dependencies]
+dissimulare-platform = { path = "crates/platform" }
+dissimulare-ca = { path = "crates/ca" }
+dissimulare-filters = { path = "crates/filters" }
+dissimulare-core = { path = "crates/core" }
+
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+bincode = "1"
+directories = "5"
+url = "2"
+http = "1"
+bytes = "1"
+
+# Default features already give us decoder + rcgen-ca + rustls-client, which
+# is exactly what we need; rcgen below is pinned to the same 0.14 line
+# hudsucker itself depends on so the `rcgen::Issuer`/`KeyPair` types we build
+# are the same types `RcgenAuthority::new` expects (Cargo unifies the two
+# into a single dependency as long as the semver ranges are compatible).
+hudsucker = "0.25"
+adblock = "0.13"
+rcgen = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+clap = { version = "4", features = ["derive"] }

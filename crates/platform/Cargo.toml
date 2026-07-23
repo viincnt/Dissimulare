@@ -1,0 +1,22 @@
+[package]
+name = "dissimulare-platform"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OS-specific integration for Dissimulare (cert store, system proxy), isolated behind traits so the rest of the app stays platform-agnostic."
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+directories = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+schannel = "0.1"
+winreg = "0.52"
+windows = { version = "0.58", features = [
+    "Win32_Networking_WinInet",
+    "Win32_Foundation",
+] }

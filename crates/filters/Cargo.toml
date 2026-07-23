@@ -1,0 +1,17 @@
+[package]
+name = "dissimulare-filters"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "adblock-rust engine wrapper: default filter lists, download/cache/refresh, and network-request blocking decisions."
+
+[dependencies]
+dissimulare-platform = { workspace = true }
+adblock = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

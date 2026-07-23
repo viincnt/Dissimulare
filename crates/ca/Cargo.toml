@@ -1,0 +1,18 @@
+[package]
+name = "dissimulare-ca"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Root CA generation, persistence and OS trust-store lifecycle for Dissimulare's MITM proxy."
+
+[dependencies]
+dissimulare-platform = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+hudsucker = { workspace = true }
+rcgen = { workspace = true }
+sha1 = "0.10"
