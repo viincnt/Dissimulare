@@ -25,8 +25,8 @@
   <a href="#-license">
     <img alt="license" src="https://img.shields.io/badge/license-MIT-8b2fc9?style=for-the-badge&labelColor=1a1b26" />
   </a>
-  <a href="https://github.com/viincnt/dissimulare">
-    <img alt="github" src="https://img.shields.io/badge/GitHub-viincnt%2Fdissimulare-8b2fc9?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1b26" />
+  <a href="https://github.com/viincnt/Dissimulare">
+    <img alt="github" src="https://img.shields.io/badge/GitHub-viincnt%2FDissimulare-8b2fc9?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1b26" />
   </a>
 </p>
 
@@ -172,8 +172,8 @@ Requirements:
 - **Windows only, for now:** the MSVC C++ build tools and Windows 10/11 SDK — install via the Visual Studio Installer with the "Desktop development with C++" workload if `cargo build` fails to find `link.exe`
 
 ```sh
-git clone https://github.com/viincnt/dissimulare.git
-cd dissimulare
+git clone https://github.com/viincnt/Dissimulare.git
+cd Dissimulare
 cargo build --workspace
 ```
 
