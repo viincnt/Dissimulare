@@ -19,5 +19,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Status => commands::status(),
         Command::Uninstall => commands::uninstall(),
         Command::Exceptions { action } => commands::exceptions(action),
+        Command::Bypass { action } => commands::bypass(action),
     }
 }

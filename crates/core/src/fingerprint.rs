@@ -103,11 +103,7 @@ impl FingerprintPolicy {
     /// Whether `host` (or a parent of it — `chaos_exceptions` entries match
     /// their subdomains too) is on the exception list.
     fn is_chaos_exception(&self, host: &str) -> bool {
-        let host = host.to_ascii_lowercase();
-        self.chaos_exceptions.iter().any(|domain| {
-            let domain = domain.to_ascii_lowercase();
-            host == domain || host.ends_with(&format!(".{domain}"))
-        })
+        crate::domain_match::matches_any(host, &self.chaos_exceptions)
     }
 
     /// Rewrites `headers` in place for a request headed to `request_uri`,

@@ -3,12 +3,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use crate::app::DomainListKind;
 use crate::theme;
-use dissimulare_cli::config::ChaosException;
+use dissimulare_cli::config::DomainEntry;
 
-pub fn draw(frame: &mut Frame, entries: &[ChaosException], selected: usize, status: Option<&str>) {
+pub fn draw(frame: &mut Frame, kind: DomainListKind, entries: &[DomainEntry], selected: usize, status: Option<&str>) {
     let areas = super::outer_layout(frame.area());
-    super::draw_header(frame, areas[0], "Exceptions");
+    super::draw_header(frame, areas[0], kind.title());
 
     let v = Layout::default()
         .direction(Direction::Vertical)
@@ -17,9 +18,7 @@ pub fn draw(frame: &mut Frame, entries: &[ChaosException], selected: usize, stat
 
     if entries.is_empty() {
         frame.render_widget(
-            Paragraph::new("No exceptions configured. Press [a] to add one.")
-                .alignment(Alignment::Center)
-                .style(theme::muted()),
+            Paragraph::new(kind.empty_hint()).alignment(Alignment::Center).style(theme::muted()),
             v[0],
         );
     } else {

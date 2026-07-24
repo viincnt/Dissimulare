@@ -1,5 +1,5 @@
-use crate::cli::ExceptionsAction;
-use crate::config::{AppConfig, ChaosException};
+use crate::cli::{BypassAction, ExceptionsAction};
+use crate::config::{AppConfig, DomainEntry};
 use crate::seed::load_or_generate_chaos_seed;
 use anyhow::{bail, Context, Result};
 use dissimulare_ca::RootCa;
@@ -155,8 +155,15 @@ pub async fn start(set_system_proxy_override: Option<bool>) -> Result<RunningPro
     let stats = Stats::new();
     let chaos_seed = load_or_generate_chaos_seed(&paths)?;
     let policy = config.fingerprint.to_policy(chaos_seed);
-    let handler =
-        DissimulareHandler::new(filter_service, policy, stats.clone(), config.youtube.strip_ad_metadata);
+    let bypass_domains: Vec<String> =
+        config.bypass.domains.iter().filter(|d| d.enabled).map(|d| d.domain.clone()).collect();
+    let handler = DissimulareHandler::new(
+        filter_service,
+        policy,
+        stats.clone(),
+        config.youtube.strip_ad_metadata,
+        bypass_domains,
+    );
 
     let authority = root_ca.to_authority()?;
     let listen_addr = config.proxy.listen_addr;
@@ -321,54 +328,43 @@ pub fn normalize_domain(input: &str) -> String {
     host.trim().to_ascii_lowercase()
 }
 
-/// The chaos-mode exception list as currently saved (or the defaults, if
-/// nothing's been saved yet).
-pub fn exceptions_list() -> Result<Vec<ChaosException>> {
-    let paths = AppPaths::new()?;
-    let config = AppConfig::load_or_default(&paths)?;
-    Ok(config.fingerprint.chaos_exceptions)
-}
+// --- Shared mechanics behind every user-editable domain list (chaos-mode
+// exceptions, the no-intercept bypass list): add/remove/enable-disable/
+// import/export, each operating on whichever `Vec<DomainEntry>` the
+// caller points it at. The public `exceptions_*`/`bypass_*` functions
+// below are thin, explicit wrappers over these — one per list, so the CLI
+// surface stays a plain `dissimulare exceptions ...` / `dissimulare
+// bypass ...` rather than something more generic-and-clever.
 
-pub fn exceptions_add(domain: &str) -> Result<()> {
-    let paths = AppPaths::new()?;
-    let mut config = AppConfig::load_or_default(&paths)?;
+fn domain_entries_add(entries: &mut Vec<DomainEntry>, domain: &str) -> String {
     let domain = normalize_domain(domain);
-    match config.fingerprint.chaos_exceptions.iter_mut().find(|e| e.domain == domain) {
+    match entries.iter_mut().find(|e| e.domain == domain) {
         Some(existing) => existing.enabled = true,
-        None => config.fingerprint.chaos_exceptions.push(ChaosException { domain, enabled: true }),
+        None => entries.push(DomainEntry { domain: domain.clone(), enabled: true }),
     }
-    config.save(&paths)
+    domain
 }
 
-pub fn exceptions_remove(domain: &str) -> Result<()> {
-    let paths = AppPaths::new()?;
-    let mut config = AppConfig::load_or_default(&paths)?;
+fn domain_entries_remove(entries: &mut Vec<DomainEntry>, domain: &str) -> String {
     let domain = normalize_domain(domain);
-    config.fingerprint.chaos_exceptions.retain(|e| e.domain != domain);
-    config.save(&paths)
+    entries.retain(|e| e.domain != domain);
+    domain
 }
 
 /// Returns whether the domain was found (and therefore actually changed).
-pub fn exceptions_set_enabled(domain: &str, enabled: bool) -> Result<bool> {
-    let paths = AppPaths::new()?;
-    let mut config = AppConfig::load_or_default(&paths)?;
+fn domain_entries_set_enabled(entries: &mut [DomainEntry], domain: &str, enabled: bool) -> bool {
     let domain = normalize_domain(domain);
-    let Some(existing) = config.fingerprint.chaos_exceptions.iter_mut().find(|e| e.domain == domain) else {
-        return Ok(false);
+    let Some(existing) = entries.iter_mut().find(|e| e.domain == domain) else {
+        return false;
     };
     existing.enabled = enabled;
-    config.save(&paths)?;
-    Ok(true)
+    true
 }
 
-/// Merges domains from a plain-text file (one per line; blank lines and
-/// `#` comments ignored) into the list, enabled. Returns how many lines
-/// were recognized as domains.
-pub fn exceptions_import(path: &Path) -> Result<usize> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let paths = AppPaths::new()?;
-    let mut config = AppConfig::load_or_default(&paths)?;
-
+/// Merges domains from plain text (one per line; blank lines and `#`
+/// comments ignored) into `entries`, enabled. Returns how many lines were
+/// recognized as domains.
+fn domain_entries_import(entries: &mut Vec<DomainEntry>, text: &str) -> usize {
     let mut imported = 0;
     for line in text.lines() {
         let line = line.trim();
@@ -379,33 +375,72 @@ pub fn exceptions_import(path: &Path) -> Result<usize> {
         if domain.is_empty() {
             continue;
         }
-        match config.fingerprint.chaos_exceptions.iter_mut().find(|e| e.domain == domain) {
-            Some(existing) => existing.enabled = true,
-            None => config.fingerprint.chaos_exceptions.push(ChaosException { domain, enabled: true }),
-        }
+        domain_entries_add(entries, &domain);
         imported += 1;
     }
-
-    config.save(&paths)?;
-    Ok(imported)
+    imported
 }
 
-/// Writes every currently-enabled domain to `path`, one per line, so the
+/// Plain-text form of every currently-enabled domain, one per line, so a
 /// list can be shared/reused independently of the rest of the app config.
 /// Disabled entries are intentionally left out: from outside this app, a
 /// plain domain list has no way to represent "present but inactive".
-pub fn exceptions_export(path: &Path) -> Result<usize> {
-    let paths = AppPaths::new()?;
-    let config = AppConfig::load_or_default(&paths)?;
-    let domains: Vec<&str> =
-        config.fingerprint.chaos_exceptions.iter().filter(|e| e.enabled).map(|e| e.domain.as_str()).collect();
-
+fn domain_entries_export_text(entries: &[DomainEntry]) -> String {
+    let domains: Vec<&str> = entries.iter().filter(|e| e.enabled).map(|e| e.domain.as_str()).collect();
     let mut text = domains.join("\n");
     if !text.is_empty() {
         text.push('\n');
     }
-    std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
-    Ok(domains.len())
+    text
+}
+
+/// The chaos-mode exception list as currently saved (or the defaults, if
+/// nothing's been saved yet).
+pub fn exceptions_list() -> Result<Vec<DomainEntry>> {
+    let paths = AppPaths::new()?;
+    Ok(AppConfig::load_or_default(&paths)?.fingerprint.chaos_exceptions)
+}
+
+pub fn exceptions_add(domain: &str) -> Result<()> {
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    domain_entries_add(&mut config.fingerprint.chaos_exceptions, domain);
+    config.save(&paths)
+}
+
+pub fn exceptions_remove(domain: &str) -> Result<()> {
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    domain_entries_remove(&mut config.fingerprint.chaos_exceptions, domain);
+    config.save(&paths)
+}
+
+pub fn exceptions_set_enabled(domain: &str, enabled: bool) -> Result<bool> {
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    let found = domain_entries_set_enabled(&mut config.fingerprint.chaos_exceptions, domain, enabled);
+    if found {
+        config.save(&paths)?;
+    }
+    Ok(found)
+}
+
+pub fn exceptions_import(path: &Path) -> Result<usize> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    let count = domain_entries_import(&mut config.fingerprint.chaos_exceptions, &text);
+    config.save(&paths)?;
+    Ok(count)
+}
+
+pub fn exceptions_export(path: &Path) -> Result<usize> {
+    let paths = AppPaths::new()?;
+    let config = AppConfig::load_or_default(&paths)?;
+    let count = config.fingerprint.chaos_exceptions.iter().filter(|e| e.enabled).count();
+    std::fs::write(path, domain_entries_export_text(&config.fingerprint.chaos_exceptions))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(count)
 }
 
 pub fn exceptions(action: ExceptionsAction) -> Result<()> {
@@ -453,6 +488,102 @@ pub fn exceptions(action: ExceptionsAction) -> Result<()> {
         }
         ExceptionsAction::Export { path } => {
             let count = exceptions_export(&path)?;
+            println!("Exported {count} enabled domain(s) to {}.", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// The no-intercept bypass list as currently saved (or the defaults, if
+/// nothing's been saved yet).
+pub fn bypass_list() -> Result<Vec<DomainEntry>> {
+    let paths = AppPaths::new()?;
+    Ok(AppConfig::load_or_default(&paths)?.bypass.domains)
+}
+
+pub fn bypass_add(domain: &str) -> Result<()> {
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    domain_entries_add(&mut config.bypass.domains, domain);
+    config.save(&paths)
+}
+
+pub fn bypass_remove(domain: &str) -> Result<()> {
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    domain_entries_remove(&mut config.bypass.domains, domain);
+    config.save(&paths)
+}
+
+pub fn bypass_set_enabled(domain: &str, enabled: bool) -> Result<bool> {
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    let found = domain_entries_set_enabled(&mut config.bypass.domains, domain, enabled);
+    if found {
+        config.save(&paths)?;
+    }
+    Ok(found)
+}
+
+pub fn bypass_import(path: &Path) -> Result<usize> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let paths = AppPaths::new()?;
+    let mut config = AppConfig::load_or_default(&paths)?;
+    let count = domain_entries_import(&mut config.bypass.domains, &text);
+    config.save(&paths)?;
+    Ok(count)
+}
+
+pub fn bypass_export(path: &Path) -> Result<usize> {
+    let paths = AppPaths::new()?;
+    let config = AppConfig::load_or_default(&paths)?;
+    let count = config.bypass.domains.iter().filter(|e| e.enabled).count();
+    std::fs::write(path, domain_entries_export_text(&config.bypass.domains))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(count)
+}
+
+pub fn bypass(action: BypassAction) -> Result<()> {
+    match action {
+        BypassAction::List => {
+            let entries = bypass_list()?;
+            if entries.is_empty() {
+                println!("No bypass domains configured.");
+            }
+            for entry in &entries {
+                println!("{} [{}]", entry.domain, if entry.enabled { "enabled" } else { "disabled" });
+            }
+        }
+        BypassAction::Add { domain } => {
+            bypass_add(&domain)?;
+            println!("Added {} to the bypass list — traffic to it is never intercepted.", normalize_domain(&domain));
+        }
+        BypassAction::Remove { domain } => {
+            bypass_remove(&domain)?;
+            println!("Removed {} from the bypass list.", normalize_domain(&domain));
+        }
+        BypassAction::Enable { domain } => {
+            let domain = normalize_domain(&domain);
+            if bypass_set_enabled(&domain, true)? {
+                println!("Enabled {domain}.");
+            } else {
+                println!("{domain} isn't in the list — add it with `dissimulare bypass add {domain}`.");
+            }
+        }
+        BypassAction::Disable { domain } => {
+            let domain = normalize_domain(&domain);
+            if bypass_set_enabled(&domain, false)? {
+                println!("Disabled {domain}.");
+            } else {
+                println!("{domain} isn't in the list.");
+            }
+        }
+        BypassAction::Import { path } => {
+            let count = bypass_import(&path)?;
+            println!("Imported {count} domain(s) from {}.", path.display());
+        }
+        BypassAction::Export { path } => {
+            let count = bypass_export(&path)?;
             println!("Exported {count} enabled domain(s) to {}.", path.display());
         }
     }

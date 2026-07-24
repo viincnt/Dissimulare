@@ -5,6 +5,7 @@
 //! identity instead of trying to blend into a crowd.
 
 mod chaos;
+mod domain_match;
 mod fingerprint;
 mod handler;
 mod html;

@@ -34,16 +34,32 @@ pub struct DissimulareHandler {
     policy: Arc<FingerprintPolicy>,
     stats: Stats,
     strip_youtube_ads: bool,
+    /// Hosts (and their subdomains) never intercepted at all — no cert
+    /// swap, no header rewriting, nothing: a raw tunnel straight through,
+    /// indistinguishable from browsing without this proxy. The escape
+    /// hatch for sites whose TLS ClientHello fingerprint alone (JA3/JA4)
+    /// trips anti-bot detection: that connection is made by this proxy's
+    /// own TLS stack rather than the browser's, so no amount of
+    /// HTTP-layer identity tuning can fix it — not intercepting is the
+    /// only thing that actually works.
+    bypass_domains: Arc<[String]>,
     pending: Arc<Mutex<PendingExchange>>,
 }
 
 impl DissimulareHandler {
-    pub fn new(filters: FilterService, policy: FingerprintPolicy, stats: Stats, strip_youtube_ads: bool) -> Self {
+    pub fn new(
+        filters: FilterService,
+        policy: FingerprintPolicy,
+        stats: Stats,
+        strip_youtube_ads: bool,
+        bypass_domains: Vec<String>,
+    ) -> Self {
         Self {
             filters,
             policy: Arc::new(policy),
             stats,
             strip_youtube_ads,
+            bypass_domains: bypass_domains.into(),
             pending: Arc::new(Mutex::new(PendingExchange::default())),
         }
     }
@@ -54,6 +70,13 @@ impl DissimulareHandler {
 }
 
 impl HttpHandler for DissimulareHandler {
+    async fn should_intercept_connect(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
+        match req.uri().host() {
+            Some(host) => !crate::domain_match::matches_any(host, &self.bypass_domains),
+            None => true,
+        }
+    }
+
     async fn handle_request(&mut self, _ctx: &HttpContext, mut req: Request<Body>) -> RequestOrResponse {
         self.stats.record_request();
 

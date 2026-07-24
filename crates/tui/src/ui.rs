@@ -1,6 +1,6 @@
 mod consent;
 mod dashboard;
-mod exceptions;
+mod domain_list;
 mod menu;
 mod message;
 
@@ -20,26 +20,26 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Busy(label) => message::draw_busy(frame, label),
         Screen::Message { title, lines, tone } => message::draw(frame, title, lines, tone),
         Screen::ConfirmUninstall { selected } => message::draw_confirm_uninstall(frame, *selected),
-        Screen::Exceptions { entries, selected, status } => {
-            exceptions::draw(frame, entries, *selected, status.as_deref())
+        Screen::DomainList { kind, entries, selected, status } => {
+            domain_list::draw(frame, *kind, entries, *selected, status.as_deref())
         }
-        Screen::ExceptionsAdd { input } => exceptions::draw_text_input(
+        Screen::DomainListAdd { kind, input } => domain_list::draw_text_input(
             frame,
-            "Exceptions \u{203a} Add",
+            &format!("{} \u{203a} Add", kind.title()),
             "Enter a domain (e.g. example.com):",
             input,
             &[("type", "domain"), ("\u{21b5}", "add"), ("Esc", "cancel")],
         ),
-        Screen::ExceptionsImportPath { input } => exceptions::draw_text_input(
+        Screen::DomainListImportPath { kind, input } => domain_list::draw_text_input(
             frame,
-            "Exceptions \u{203a} Import",
+            &format!("{} \u{203a} Import", kind.title()),
             "Path to a plain-text domain list (one per line):",
             input,
             &[("type", "path"), ("\u{21b5}", "import"), ("Esc", "cancel")],
         ),
-        Screen::ExceptionsExportPath { input } => exceptions::draw_text_input(
+        Screen::DomainListExportPath { kind, input } => domain_list::draw_text_input(
             frame,
-            "Exceptions \u{203a} Export",
+            &format!("{} \u{203a} Export", kind.title()),
             "Path to write the enabled domains to:",
             input,
             &[("type", "path"), ("\u{21b5}", "export"), ("Esc", "cancel")],

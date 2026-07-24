@@ -30,10 +30,41 @@ pub enum Command {
         #[command(subcommand)]
         action: ExceptionsAction,
     },
+    /// Manage the no-intercept bypass list — sites this proxy never MITMs
+    /// at all (no ad-blocking, no header/identity rewriting, nothing): a
+    /// raw tunnel straight through. For sites whose TLS ClientHello
+    /// fingerprint alone trips anti-bot detection, where no HTTP-layer
+    /// identity change can help since that connection is never seen by
+    /// the browser's own TLS stack in the first place.
+    Bypass {
+        #[command(subcommand)]
+        action: BypassAction,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum ExceptionsAction {
+    /// List every entry and whether it's currently enabled.
+    List,
+    /// Add a domain to the list (enabled by default; re-enables it if it
+    /// was already present but disabled).
+    Add { domain: String },
+    /// Remove a domain from the list entirely.
+    Remove { domain: String },
+    /// Enable an existing entry without removing it.
+    Enable { domain: String },
+    /// Disable an existing entry without removing it.
+    Disable { domain: String },
+    /// Merge domains from a plain-text file (one per line, blank lines and
+    /// `#` comments ignored) into the list, enabled.
+    Import { path: PathBuf },
+    /// Write every currently-enabled domain to a plain-text file, one per
+    /// line, so the list can be shared or reused elsewhere.
+    Export { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+pub enum BypassAction {
     /// List every entry and whether it's currently enabled.
     List,
     /// Add a domain to the list (enabled by default; re-enables it if it

@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub filters: FiltersConfig,
     pub fingerprint: FingerprintConfig,
     pub youtube: YoutubeConfig,
+    pub bypass: BypassConfig,
 }
 
 impl AppConfig {
@@ -100,17 +101,17 @@ impl FiltersConfig {
     }
 }
 
-/// A single chaos-mode exception entry: a domain (and its subdomains) that
-/// always gets a normal browser identity, plus whether it's currently
-/// active. Kept separate from simply removing the domain so a user can
-/// toggle a predefined entry off without losing it.
+/// A single entry in a user-editable domain list (chaos-mode exceptions or
+/// the no-intercept bypass list): a domain (and its subdomains) plus
+/// whether it's currently active. Kept separate from simply removing the
+/// domain so a user can toggle a predefined entry off without losing it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChaosException {
+pub struct DomainEntry {
     pub domain: String,
     pub enabled: bool,
 }
 
-impl ChaosException {
+impl DomainEntry {
     fn enabled(domain: &str) -> Self {
         Self { domain: domain.to_string(), enabled: true }
     }
@@ -120,7 +121,54 @@ impl ChaosException {
 /// server-side UA sniffing falling back to a legacy/basic page being the
 /// usual symptom) — pre-populated but each individually toggleable, and
 /// the user can add their own on top.
-const DEFAULT_CHAOS_EXCEPTIONS: &[&str] = &["google.com"];
+///
+/// Only `google.com` is confirmed first-hand (this app's own testing); the
+/// rest are widely documented cases of the same UA-sniffing-triggers-a-
+/// legacy-fallback pattern (Microsoft's web apps and LinkedIn both have
+/// long-standing "basic"/legacy experiences they fall back to for a
+/// browser they don't recognize). Toggle off whatever you don't need —
+/// a disabled entry costs nothing.
+const DEFAULT_CHAOS_EXCEPTIONS: &[&str] =
+    &["google.com", "linkedin.com", "outlook.com", "office.com"];
+
+/// Domains that trip anti-bot detection on the TLS handshake itself (JA3/
+/// JA4 fingerprint), which no HTTP-layer identity change can fix — the
+/// only thing that works is not intercepting them at all.
+///
+/// These are all captcha/bot-check *infrastructure* domains, not specific
+/// sites — bypassing one that a given site never actually uses is inert,
+/// so there's little downside to listing every major provider with a
+/// fixed, well-known domain:
+/// - `challenges.cloudflare.com` — Cloudflare Turnstile. Confirmed
+///   first-hand: bypassing just this domain was enough, since Cloudflare's
+///   bot check happens during the challenge itself and the result is then
+///   just a cookie the protected site trusts — the site's own connection
+///   didn't need bypassing too.
+/// - `hcaptcha.com` — hCaptcha's challenge widget.
+/// - `arkoselabs.com` — Arkose Labs/FunCaptcha (used by LinkedIn, Roblox,
+///   Microsoft sign-in, and others).
+/// - `captcha-delivery.com` — DataDome's challenge domain.
+/// - `recaptcha.net` — Google reCAPTCHA's alternate domain (used as a
+///   fallback where google.com itself is blocked).
+const DEFAULT_BYPASS_DOMAINS: &[&str] =
+    &["challenges.cloudflare.com", "hcaptcha.com", "arkoselabs.com", "captcha-delivery.com", "recaptcha.net"];
+
+/// Hosts (and their subdomains) that get zero interception: no cert swap,
+/// no header rewriting, no ad-blocking, no fingerprint spoofing — a raw
+/// tunnel straight through, indistinguishable from not running this proxy
+/// at all. See the `dissimulare bypass` subcommand for
+/// add/remove/enable/disable/import/export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BypassConfig {
+    pub domains: Vec<DomainEntry>,
+}
+
+impl Default for BypassConfig {
+    fn default() -> Self {
+        Self { domains: DEFAULT_BYPASS_DOMAINS.iter().map(|d| DomainEntry::enabled(d)).collect() }
+    }
+}
 
 /// Which identity strategy to use. `"chaos"` (the default) feeds every
 /// domain a different, deliberately absurd hardware/OS combination instead
@@ -139,7 +187,7 @@ pub struct FingerprintConfig {
     /// entries can be disabled instead of removed, and custom domains can
     /// be added — see the `dissimulare exceptions` subcommand for
     /// add/remove/enable/disable/import/export.
-    pub chaos_exceptions: Vec<ChaosException>,
+    pub chaos_exceptions: Vec<DomainEntry>,
 }
 
 impl Default for FingerprintConfig {
@@ -152,7 +200,7 @@ impl Default for FingerprintConfig {
             strip_client_hints: defaults.strip_client_hints,
             trim_cross_site_referer: defaults.trim_cross_site_referer,
             send_gpc: defaults.send_gpc,
-            chaos_exceptions: DEFAULT_CHAOS_EXCEPTIONS.iter().map(|d| ChaosException::enabled(d)).collect(),
+            chaos_exceptions: DEFAULT_CHAOS_EXCEPTIONS.iter().map(|d| DomainEntry::enabled(d)).collect(),
         }
     }
 }

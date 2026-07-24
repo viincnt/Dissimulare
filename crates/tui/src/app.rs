@@ -2,7 +2,7 @@ use crate::terminal::Term;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use dissimulare_cli::commands::{self, RunningProxy};
-use dissimulare_cli::config::ChaosException;
+use dissimulare_cli::config::DomainEntry;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,7 @@ const MENU_ITEMS_WITH_CA: &[(&str, &str)] = &[
     ("Run", "Start the proxy and watch live stats"),
     ("Status", "Show CA trust state and cached filter lists"),
     ("Exceptions", "Sites that always get a normal identity in chaos mode"),
+    ("Bypass", "Sites never intercepted at all (fixes TLS-fingerprint captcha loops)"),
     ("Uninstall", "Remove the CA and clear system proxy settings"),
     ("Quit", "Exit"),
 ];
@@ -29,6 +30,75 @@ pub enum Tone {
     Info,
     Success,
     Error,
+}
+
+/// The two user-editable domain lists share an identical shape (toggleable
+/// entries + add/remove/import/export), just backed by different
+/// `dissimulare_cli::commands` functions and config sections — this is the
+/// single place that difference lives, so the `Screen`/UI/key-handling
+/// code below is written once and works for both.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DomainListKind {
+    ChaosExceptions,
+    Bypass,
+}
+
+impl DomainListKind {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::ChaosExceptions => "Exceptions",
+            Self::Bypass => "Bypass",
+        }
+    }
+
+    pub fn empty_hint(self) -> &'static str {
+        match self {
+            Self::ChaosExceptions => "No exceptions configured. Press [a] to add one.",
+            Self::Bypass => "No bypass domains configured. Press [a] to add one.",
+        }
+    }
+
+    fn list(self) -> Result<Vec<DomainEntry>> {
+        match self {
+            Self::ChaosExceptions => commands::exceptions_list(),
+            Self::Bypass => commands::bypass_list(),
+        }
+    }
+
+    fn add(self, domain: &str) -> Result<()> {
+        match self {
+            Self::ChaosExceptions => commands::exceptions_add(domain),
+            Self::Bypass => commands::bypass_add(domain),
+        }
+    }
+
+    fn remove(self, domain: &str) -> Result<()> {
+        match self {
+            Self::ChaosExceptions => commands::exceptions_remove(domain),
+            Self::Bypass => commands::bypass_remove(domain),
+        }
+    }
+
+    fn set_enabled(self, domain: &str, enabled: bool) -> Result<bool> {
+        match self {
+            Self::ChaosExceptions => commands::exceptions_set_enabled(domain, enabled),
+            Self::Bypass => commands::bypass_set_enabled(domain, enabled),
+        }
+    }
+
+    fn import(self, path: &Path) -> Result<usize> {
+        match self {
+            Self::ChaosExceptions => commands::exceptions_import(path),
+            Self::Bypass => commands::bypass_import(path),
+        }
+    }
+
+    fn export(self, path: &Path) -> Result<usize> {
+        match self {
+            Self::ChaosExceptions => commands::exceptions_export(path),
+            Self::Bypass => commands::bypass_export(path),
+        }
+    }
 }
 
 pub enum Screen {
@@ -46,12 +116,13 @@ pub enum Screen {
     Message { title: String, lines: Vec<String>, tone: Tone },
     /// `selected`: 0 = Yes, 1 = No. Defaults to No.
     ConfirmUninstall { selected: usize },
-    /// Chaos-mode exception checklist: toggle entries on/off, or jump into
+    /// Toggleable domain-list checklist — chaos exceptions or the bypass
+    /// list, see [`DomainListKind`]: toggle entries on/off, or jump into
     /// `a`/`d`/`i`/`e` for add/remove/import/export.
-    Exceptions { entries: Vec<ChaosException>, selected: usize, status: Option<String> },
-    ExceptionsAdd { input: String },
-    ExceptionsImportPath { input: String },
-    ExceptionsExportPath { input: String },
+    DomainList { kind: DomainListKind, entries: Vec<DomainEntry>, selected: usize, status: Option<String> },
+    DomainListAdd { kind: DomainListKind, input: String },
+    DomainListImportPath { kind: DomainListKind, input: String },
+    DomainListExportPath { kind: DomainListKind, input: String },
     Dashboard,
 }
 
@@ -97,19 +168,19 @@ impl App {
         self.screen = Screen::Menu;
     }
 
-    /// Re-reads the exception list from disk and shows it, keeping the
+    /// Re-reads `kind`'s domain list from disk and shows it, keeping the
     /// cursor as close as possible to `keep_selected` (clamped, since an
     /// add/remove may have changed how many entries there are), with an
     /// optional status line (e.g. "Imported 3 domain(s)."). Used both when
     /// first entering the screen and after every action that changes it,
     /// so what's on screen never drifts from what's actually saved.
-    fn reload_exceptions(&mut self, keep_selected: usize, status: Option<String>) {
-        match commands::exceptions_list() {
+    fn reload_domain_list(&mut self, kind: DomainListKind, keep_selected: usize, status: Option<String>) {
+        match kind.list() {
             Ok(entries) => {
                 let selected = if entries.is_empty() { 0 } else { keep_selected.min(entries.len() - 1) };
-                self.screen = Screen::Exceptions { entries, selected, status };
+                self.screen = Screen::DomainList { kind, entries, selected, status };
             }
-            Err(err) => self.show_error("Exceptions", err),
+            Err(err) => self.show_error(kind.title(), err),
         }
     }
 
@@ -168,19 +239,19 @@ impl App {
                 Ok(true)
             }
             Screen::ConfirmUninstall { selected } => self.handle_confirm_uninstall_key(code, selected).await,
-            Screen::Exceptions { entries, selected, status } => {
-                self.handle_exceptions_key(code, entries, selected, status)
+            Screen::DomainList { kind, entries, selected, status } => {
+                self.handle_domain_list_key(code, kind, entries, selected, status)
             }
-            Screen::ExceptionsAdd { input } => {
-                self.handle_exceptions_add_key(code, input);
+            Screen::DomainListAdd { kind, input } => {
+                self.handle_domain_list_add_key(code, kind, input);
                 Ok(true)
             }
-            Screen::ExceptionsImportPath { input } => {
-                self.handle_exceptions_import_key(code, input);
+            Screen::DomainListImportPath { kind, input } => {
+                self.handle_domain_list_import_key(code, kind, input);
                 Ok(true)
             }
-            Screen::ExceptionsExportPath { input } => {
-                self.handle_exceptions_export_key(code, input);
+            Screen::DomainListExportPath { kind, input } => {
+                self.handle_domain_list_export_key(code, kind, input);
                 Ok(true)
             }
             Screen::Dashboard => {
@@ -249,7 +320,8 @@ impl App {
                 }
                 Err(err) => self.show_error("Status", err),
             },
-            "Exceptions" => self.reload_exceptions(0, None),
+            "Exceptions" => self.reload_domain_list(DomainListKind::ChaosExceptions, 0, None),
+            "Bypass" => self.reload_domain_list(DomainListKind::Bypass, 0, None),
             "Uninstall" => {
                 self.screen = Screen::ConfirmUninstall { selected: 1 };
             }
@@ -373,10 +445,11 @@ impl App {
         Ok(true)
     }
 
-    fn handle_exceptions_key(
+    fn handle_domain_list_key(
         &mut self,
         code: KeyCode,
-        entries: Vec<ChaosException>,
+        kind: DomainListKind,
+        entries: Vec<DomainEntry>,
         selected: usize,
         status: Option<String>,
     ) -> Result<bool> {
@@ -384,97 +457,93 @@ impl App {
         match code {
             KeyCode::Up | KeyCode::Char('k') if item_count > 0 => {
                 let selected = if selected == 0 { item_count - 1 } else { selected - 1 };
-                self.screen = Screen::Exceptions { entries, selected, status: None };
+                self.screen = Screen::DomainList { kind, entries, selected, status: None };
             }
             KeyCode::Down | KeyCode::Char('j') if item_count > 0 => {
                 let selected = (selected + 1) % item_count;
-                self.screen = Screen::Exceptions { entries, selected, status: None };
+                self.screen = Screen::DomainList { kind, entries, selected, status: None };
             }
             KeyCode::Enter | KeyCode::Char(' ') if item_count > 0 => {
                 let domain = entries[selected].domain.clone();
                 let now_enabled = !entries[selected].enabled;
-                match commands::exceptions_set_enabled(&domain, now_enabled) {
-                    Ok(_) => self.reload_exceptions(selected, None),
-                    Err(err) => self.show_error("Exceptions", err),
+                match kind.set_enabled(&domain, now_enabled) {
+                    Ok(_) => self.reload_domain_list(kind, selected, None),
+                    Err(err) => self.show_error(kind.title(), err),
                 }
             }
             KeyCode::Char('d') if item_count > 0 => {
                 let domain = entries[selected].domain.clone();
-                match commands::exceptions_remove(&domain) {
-                    Ok(()) => self.reload_exceptions(selected, Some(format!("Removed {domain}."))),
-                    Err(err) => self.show_error("Exceptions", err),
+                match kind.remove(&domain) {
+                    Ok(()) => self.reload_domain_list(kind, selected, Some(format!("Removed {domain}."))),
+                    Err(err) => self.show_error(kind.title(), err),
                 }
             }
-            KeyCode::Char('a') => self.screen = Screen::ExceptionsAdd { input: String::new() },
-            KeyCode::Char('i') => self.screen = Screen::ExceptionsImportPath { input: String::new() },
-            KeyCode::Char('e') => self.screen = Screen::ExceptionsExportPath { input: String::new() },
+            KeyCode::Char('a') => self.screen = Screen::DomainListAdd { kind, input: String::new() },
+            KeyCode::Char('i') => self.screen = Screen::DomainListImportPath { kind, input: String::new() },
+            KeyCode::Char('e') => self.screen = Screen::DomainListExportPath { kind, input: String::new() },
             KeyCode::Esc | KeyCode::Char('q') => self.back_to_menu(),
-            _ => self.screen = Screen::Exceptions { entries, selected, status },
+            _ => self.screen = Screen::DomainList { kind, entries, selected, status },
         }
         Ok(true)
     }
 
-    fn handle_exceptions_add_key(&mut self, code: KeyCode, mut input: String) {
+    fn handle_domain_list_add_key(&mut self, code: KeyCode, kind: DomainListKind, mut input: String) {
         match code {
             KeyCode::Char(c) => {
                 input.push(c);
-                self.screen = Screen::ExceptionsAdd { input };
+                self.screen = Screen::DomainListAdd { kind, input };
             }
             KeyCode::Backspace => {
                 input.pop();
-                self.screen = Screen::ExceptionsAdd { input };
+                self.screen = Screen::DomainListAdd { kind, input };
             }
-            KeyCode::Enter if !input.trim().is_empty() => match commands::exceptions_add(&input) {
+            KeyCode::Enter if !input.trim().is_empty() => match kind.add(&input) {
                 Ok(()) => {
                     let domain = commands::normalize_domain(&input);
-                    self.reload_exceptions(0, Some(format!("Added {domain}.")));
+                    self.reload_domain_list(kind, 0, Some(format!("Added {domain}.")));
                 }
-                Err(err) => self.show_error("Exceptions", err),
+                Err(err) => self.show_error(kind.title(), err),
             },
-            KeyCode::Esc => self.reload_exceptions(0, None),
-            _ => self.screen = Screen::ExceptionsAdd { input },
+            KeyCode::Esc => self.reload_domain_list(kind, 0, None),
+            _ => self.screen = Screen::DomainListAdd { kind, input },
         }
     }
 
-    fn handle_exceptions_import_key(&mut self, code: KeyCode, mut input: String) {
+    fn handle_domain_list_import_key(&mut self, code: KeyCode, kind: DomainListKind, mut input: String) {
         match code {
             KeyCode::Char(c) => {
                 input.push(c);
-                self.screen = Screen::ExceptionsImportPath { input };
+                self.screen = Screen::DomainListImportPath { kind, input };
             }
             KeyCode::Backspace => {
                 input.pop();
-                self.screen = Screen::ExceptionsImportPath { input };
+                self.screen = Screen::DomainListImportPath { kind, input };
             }
-            KeyCode::Enter if !input.trim().is_empty() => {
-                match commands::exceptions_import(Path::new(input.trim())) {
-                    Ok(count) => self.reload_exceptions(0, Some(format!("Imported {count} domain(s)."))),
-                    Err(err) => self.show_error("Exceptions", err),
-                }
-            }
-            KeyCode::Esc => self.reload_exceptions(0, None),
-            _ => self.screen = Screen::ExceptionsImportPath { input },
+            KeyCode::Enter if !input.trim().is_empty() => match kind.import(Path::new(input.trim())) {
+                Ok(count) => self.reload_domain_list(kind, 0, Some(format!("Imported {count} domain(s)."))),
+                Err(err) => self.show_error(kind.title(), err),
+            },
+            KeyCode::Esc => self.reload_domain_list(kind, 0, None),
+            _ => self.screen = Screen::DomainListImportPath { kind, input },
         }
     }
 
-    fn handle_exceptions_export_key(&mut self, code: KeyCode, mut input: String) {
+    fn handle_domain_list_export_key(&mut self, code: KeyCode, kind: DomainListKind, mut input: String) {
         match code {
             KeyCode::Char(c) => {
                 input.push(c);
-                self.screen = Screen::ExceptionsExportPath { input };
+                self.screen = Screen::DomainListExportPath { kind, input };
             }
             KeyCode::Backspace => {
                 input.pop();
-                self.screen = Screen::ExceptionsExportPath { input };
+                self.screen = Screen::DomainListExportPath { kind, input };
             }
-            KeyCode::Enter if !input.trim().is_empty() => {
-                match commands::exceptions_export(Path::new(input.trim())) {
-                    Ok(count) => self.reload_exceptions(0, Some(format!("Exported {count} domain(s)."))),
-                    Err(err) => self.show_error("Exceptions", err),
-                }
-            }
-            KeyCode::Esc => self.reload_exceptions(0, None),
-            _ => self.screen = Screen::ExceptionsExportPath { input },
+            KeyCode::Enter if !input.trim().is_empty() => match kind.export(Path::new(input.trim())) {
+                Ok(count) => self.reload_domain_list(kind, 0, Some(format!("Exported {count} domain(s)."))),
+                Err(err) => self.show_error(kind.title(), err),
+            },
+            KeyCode::Esc => self.reload_domain_list(kind, 0, None),
+            _ => self.screen = Screen::DomainListExportPath { kind, input },
         }
     }
 
