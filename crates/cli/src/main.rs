@@ -18,5 +18,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Run { set_system_proxy } => commands::run(set_system_proxy).await,
         Command::Status => commands::status(),
         Command::Uninstall => commands::uninstall(),
+        Command::Exceptions { action } => commands::exceptions(action),
     }
 }

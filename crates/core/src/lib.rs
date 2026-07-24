@@ -10,6 +10,7 @@ mod handler;
 mod html;
 mod stats;
 mod tracking_params;
+mod youtube;
 
 pub use fingerprint::{FingerprintPolicy, IdentityMode, ResolvedIdentity, DEFAULT_USER_AGENT};
 pub use handler::DissimulareHandler;

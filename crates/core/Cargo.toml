@@ -13,5 +13,6 @@ dissimulare-filters = { workspace = true }
 hudsucker = { workspace = true }
 http = { workspace = true }
 tracing = { workspace = true }
+serde_json = { workspace = true }
 sha1 = "0.10"
 http-body-util = "0.1"

@@ -1,5 +1,6 @@
 mod app;
 mod terminal;
+mod theme;
 mod ui;
 
 use anyhow::Result;

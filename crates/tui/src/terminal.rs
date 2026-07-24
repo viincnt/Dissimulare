@@ -19,18 +19,3 @@ pub fn restore(term: &mut Term) -> Result<()> {
     execute!(term.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }
-
-/// Temporarily leaves TUI mode so a plain `dissimulare-cli` command — which
-/// prints via `println!` and, for `setup`, reads a confirmation line from
-/// stdin — behaves exactly as it does when run from the `dissimulare`
-/// binary directly, instead of writing into the alternate screen.
-pub fn suspend(term: &mut Term) -> Result<()> {
-    restore(term)
-}
-
-pub fn resume(term: &mut Term) -> Result<()> {
-    enable_raw_mode()?;
-    execute!(term.backend_mut(), EnterAlternateScreen)?;
-    term.clear()?;
-    Ok(())
-}

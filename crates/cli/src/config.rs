@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub proxy: ProxyConfig,
     pub filters: FiltersConfig,
     pub fingerprint: FingerprintConfig,
+    pub youtube: YoutubeConfig,
 }
 
 impl AppConfig {
@@ -54,6 +55,23 @@ impl Default for ProxyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct YoutubeConfig {
+    /// Strips ad-break scheduling metadata from YouTube's internal player
+    /// API response so the player never learns there's an ad to insert.
+    /// Doesn't touch server-stitched ad formats, where no separate signal
+    /// exists to remove — disable if a YouTube API change ever makes this
+    /// misbehave, without needing a rebuild.
+    pub strip_ad_metadata: bool,
+}
+
+impl Default for YoutubeConfig {
+    fn default() -> Self {
+        Self { strip_ad_metadata: true }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FiltersConfig {
     pub lists: Vec<String>,
     pub refresh_hours: u64,
@@ -82,6 +100,28 @@ impl FiltersConfig {
     }
 }
 
+/// A single chaos-mode exception entry: a domain (and its subdomains) that
+/// always gets a normal browser identity, plus whether it's currently
+/// active. Kept separate from simply removing the domain so a user can
+/// toggle a predefined entry off without losing it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChaosException {
+    pub domain: String,
+    pub enabled: bool,
+}
+
+impl ChaosException {
+    fn enabled(domain: &str) -> Self {
+        Self { domain: domain.to_string(), enabled: true }
+    }
+}
+
+/// Domains known to break under chaos mode's absurd User-Agent (heavy
+/// server-side UA sniffing falling back to a legacy/basic page being the
+/// usual symptom) — pre-populated but each individually toggleable, and
+/// the user can add their own on top.
+const DEFAULT_CHAOS_EXCEPTIONS: &[&str] = &["google.com"];
+
 /// Which identity strategy to use. `"chaos"` (the default) feeds every
 /// domain a different, deliberately absurd hardware/OS combination instead
 /// of trying to blend into a crowd; `"uniform"` falls back to a single
@@ -95,6 +135,11 @@ pub struct FingerprintConfig {
     pub strip_client_hints: bool,
     pub trim_cross_site_referer: bool,
     pub send_gpc: bool,
+    /// Sites exempted from chaos mode. Fully user-editable: predefined
+    /// entries can be disabled instead of removed, and custom domains can
+    /// be added — see the `dissimulare exceptions` subcommand for
+    /// add/remove/enable/disable/import/export.
+    pub chaos_exceptions: Vec<ChaosException>,
 }
 
 impl Default for FingerprintConfig {
@@ -107,6 +152,7 @@ impl Default for FingerprintConfig {
             strip_client_hints: defaults.strip_client_hints,
             trim_cross_site_referer: defaults.trim_cross_site_referer,
             send_gpc: defaults.send_gpc,
+            chaos_exceptions: DEFAULT_CHAOS_EXCEPTIONS.iter().map(|d| ChaosException::enabled(d)).collect(),
         }
     }
 }
@@ -121,12 +167,20 @@ impl FingerprintConfig {
             _ => IdentityMode::Uniform(self.uniform_user_agent.clone()),
         };
 
+        let chaos_exceptions = self
+            .chaos_exceptions
+            .iter()
+            .filter(|e| e.enabled)
+            .map(|e| e.domain.clone())
+            .collect();
+
         FingerprintPolicy {
             identity_mode,
             minimal_accept_language: self.minimal_accept_language,
             strip_client_hints: self.strip_client_hints,
             trim_cross_site_referer: self.trim_cross_site_referer,
             send_gpc: self.send_gpc,
+            chaos_exceptions,
         }
     }
 }

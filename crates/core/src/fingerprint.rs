@@ -59,6 +59,13 @@ pub struct FingerprintPolicy {
     pub strip_client_hints: bool,
     pub trim_cross_site_referer: bool,
     pub send_gpc: bool,
+    /// Domains (and their subdomains) that always get a normal, common
+    /// browser identity even in [`IdentityMode::Chaos`] — an escape hatch
+    /// for sites whose own User-Agent sniffing breaks when it doesn't
+    /// recognize a real browser/OS, Google search being the prototypical
+    /// case. Ignored in [`IdentityMode::Off`]/[`IdentityMode::Uniform`],
+    /// since those already send the same identity everywhere.
+    pub chaos_exceptions: Vec<String>,
 }
 
 impl Default for FingerprintPolicy {
@@ -69,6 +76,7 @@ impl Default for FingerprintPolicy {
             strip_client_hints: true,
             trim_cross_site_referer: true,
             send_gpc: true,
+            chaos_exceptions: Vec::new(),
         }
     }
 }
@@ -80,10 +88,26 @@ impl FingerprintPolicy {
             IdentityMode::Off => None,
             IdentityMode::Uniform(ua) => Some(ResolvedIdentity { user_agent: ua.clone(), chaos: None }),
             IdentityMode::Chaos { seed } => {
+                if self.is_chaos_exception(host) {
+                    return Some(ResolvedIdentity {
+                        user_agent: DEFAULT_USER_AGENT.to_string(),
+                        chaos: None,
+                    });
+                }
                 let chaos = ChaosIdentity::for_domain(seed, host);
                 Some(ResolvedIdentity { user_agent: chaos.user_agent(), chaos: Some(chaos) })
             }
         }
+    }
+
+    /// Whether `host` (or a parent of it — `chaos_exceptions` entries match
+    /// their subdomains too) is on the exception list.
+    fn is_chaos_exception(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        self.chaos_exceptions.iter().any(|domain| {
+            let domain = domain.to_ascii_lowercase();
+            host == domain || host.ends_with(&format!(".{domain}"))
+        })
     }
 
     /// Rewrites `headers` in place for a request headed to `request_uri`,
@@ -227,5 +251,30 @@ mod tests {
             .to_str()
             .unwrap()
             .contains(chaos.hardware));
+    }
+
+    #[test]
+    fn chaos_exception_gets_a_normal_identity_instead() {
+        let policy = FingerprintPolicy {
+            identity_mode: IdentityMode::Chaos { seed: b"test-seed".to_vec() },
+            chaos_exceptions: vec!["google.com".to_string()],
+            ..FingerprintPolicy::default()
+        };
+        let mut headers = HeaderMap::new();
+
+        // Exact match and subdomain both fall under the exception.
+        let identity = policy
+            .apply(&mut headers, &uri("https://www.google.com/search"))
+            .expect("still resolves an identity, just not a chaos one");
+        assert!(identity.chaos.is_none());
+        assert_eq!(identity.user_agent, DEFAULT_USER_AGENT);
+        assert_eq!(headers.get(USER_AGENT).unwrap(), DEFAULT_USER_AGENT);
+
+        // An unrelated host still gets the chaos treatment.
+        let mut other_headers = HeaderMap::new();
+        let other_identity = policy
+            .apply(&mut other_headers, &uri("https://unrelated.example/"))
+            .expect("chaos mode always resolves an identity");
+        assert!(other_identity.chaos.is_some());
     }
 }

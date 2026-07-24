@@ -1,97 +1,143 @@
+mod consent;
+mod dashboard;
+mod exceptions;
+mod menu;
+mod message;
+
 use crate::app::{App, Screen};
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use crate::theme;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    match app.screen {
-        Screen::Menu => draw_menu(frame, app),
-        Screen::Dashboard => draw_dashboard(frame, app),
+    match &app.screen {
+        Screen::Menu => menu::draw(frame, app),
+        Screen::Consent { thumbprint, input, error } => {
+            consent::draw(frame, thumbprint, input, error.as_deref())
+        }
+        Screen::Busy(label) => message::draw_busy(frame, label),
+        Screen::Message { title, lines, tone } => message::draw(frame, title, lines, tone),
+        Screen::ConfirmUninstall { selected } => message::draw_confirm_uninstall(frame, *selected),
+        Screen::Exceptions { entries, selected, status } => {
+            exceptions::draw(frame, entries, *selected, status.as_deref())
+        }
+        Screen::ExceptionsAdd { input } => exceptions::draw_text_input(
+            frame,
+            "Exceptions \u{203a} Add",
+            "Enter a domain (e.g. example.com):",
+            input,
+            &[("type", "domain"), ("\u{21b5}", "add"), ("Esc", "cancel")],
+        ),
+        Screen::ExceptionsImportPath { input } => exceptions::draw_text_input(
+            frame,
+            "Exceptions \u{203a} Import",
+            "Path to a plain-text domain list (one per line):",
+            input,
+            &[("type", "path"), ("\u{21b5}", "import"), ("Esc", "cancel")],
+        ),
+        Screen::ExceptionsExportPath { input } => exceptions::draw_text_input(
+            frame,
+            "Exceptions \u{203a} Export",
+            "Path to write the enabled domains to:",
+            input,
+            &[("type", "path"), ("\u{21b5}", "export"), ("Esc", "cancel")],
+        ),
+        Screen::Dashboard => dashboard::draw(frame, app),
     }
 }
 
-fn draw_menu(frame: &mut Frame, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
-        .split(frame.area());
-
-    let title = Paragraph::new("🎭 Dissimulare")
-        .style(Style::default().add_modifier(Modifier::BOLD))
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(title, chunks[0]);
-
-    let items: Vec<ListItem> = app
-        .menu_items()
-        .iter()
-        .enumerate()
-        .map(|(i, (name, desc))| {
-            let selected = i == app.menu_index;
-            let name_style = if selected {
-                Style::default().fg(Color::Black).bg(Color::White)
-            } else {
-                Style::default()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{name:<11}"), name_style),
-                Span::raw(format!(" {desc}")),
-            ]))
-        })
-        .collect();
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Menu"));
-    frame.render_widget(list, chunks[1]);
-
-    let footer_text = app
-        .message
-        .clone()
-        .unwrap_or_else(|| "↑/↓ (or j/k) move · Enter select · q quit".to_string());
-    let footer = Paragraph::new(footer_text).block(Block::default().borders(Borders::ALL));
-    frame.render_widget(footer, chunks[2]);
+/// Every screen's content lives in this centered column rather than
+/// stretching edge-to-edge, matching the rest of the project's TUI style.
+pub fn centered_area(area: Rect) -> Rect {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(10), Constraint::Percentage(80), Constraint::Percentage(10)])
+        .split(area)[1]
 }
 
-fn draw_dashboard(frame: &mut Frame, app: &App) {
+/// header / content / help split within [`centered_area`], used by every
+/// screen except the main menu (which has its own bespoke logo layout).
+pub fn outer_layout(area: Rect) -> [Rect; 3] {
+    let area = centered_area(area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
-        .split(frame.area());
+        .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(3)])
+        .split(area);
+    [chunks[0], chunks[1], chunks[2]]
+}
 
-    let title = Paragraph::new("🎭 Dissimulare — proxy running")
-        .style(Style::default().add_modifier(Modifier::BOLD))
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(title, chunks[0]);
+pub fn draw_header(frame: &mut Frame, area: Rect, breadcrumb: &str) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("\u{1F3AD}", theme::bold_accent()),
+            Span::raw(" "),
+            Span::styled("Dissimulare", theme::bold_white()),
+            Span::styled("  \u{203A}  ", theme::muted()),
+            Span::styled(breadcrumb.to_string(), theme::bright()),
+        ]))
+        .block(Block::default().borders(Borders::BOTTOM).border_style(theme::subtle())),
+        area,
+    );
+}
 
-    let running = app.running.as_ref();
-    let snapshot = running.map(|r| r.stats.snapshot());
-    let elapsed = app.started_at.map(|t| t.elapsed()).unwrap_or_default();
-    let secs = elapsed.as_secs();
+pub fn draw_help(frame: &mut Frame, area: Rect, bindings: &[(&str, &str)]) {
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, (key, desc)) in bindings.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("    ", theme::muted()));
+        }
+        spans.push(Span::styled(format!("[{key}]"), theme::accent()));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(*desc, theme::muted()));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::TOP).border_style(theme::subtle())),
+        area,
+    );
+}
 
-    let lines = vec![
-        Line::from(format!(
-            "Listen address:   {}",
-            running.map(|r| r.listen_addr.to_string()).unwrap_or_default()
-        )),
-        Line::from(format!(
-            "Uptime:           {:02}:{:02}:{:02}",
-            secs / 3600,
-            (secs / 60) % 60,
-            secs % 60
-        )),
-        Line::from(""),
-        Line::from(format!(
-            "Total requests:   {}",
-            snapshot.map(|s| s.total_requests).unwrap_or(0)
-        )),
-        Line::from(format!(
-            "Blocked requests: {}",
-            snapshot.map(|s| s.blocked_requests).unwrap_or(0)
-        )),
-    ];
-    let body = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Stats"));
-    frame.render_widget(body, chunks[1]);
+/// A row of bordered, centered "buttons" — used for the main menu and for
+/// the Yes/No uninstall confirmation alike.
+pub fn draw_buttons(frame: &mut Frame, area: Rect, options: &[(&str, &str)], selected: usize) {
+    const GAP: u16 = 3;
+    const PAD: u16 = 2;
 
-    let footer = Paragraph::new("q / Esc / Ctrl-C  stop the proxy and return to the menu")
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(footer, chunks[2]);
+    let btn_widths: Vec<u16> =
+        options.iter().map(|(label, _)| (label.chars().count() as u16) + PAD * 2 + 2).collect();
+
+    let total_width: u16 =
+        btn_widths.iter().sum::<u16>() + GAP * (options.len().saturating_sub(1) as u16);
+
+    let center = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Fill(1), Constraint::Length(total_width), Constraint::Fill(1)])
+        .split(area)[1];
+
+    let mut constraints: Vec<Constraint> = Vec::new();
+    for (i, &w) in btn_widths.iter().enumerate() {
+        constraints.push(Constraint::Length(w));
+        if i < options.len() - 1 {
+            constraints.push(Constraint::Length(GAP));
+        }
+    }
+
+    let btn_areas = Layout::default().direction(Direction::Horizontal).constraints(constraints).split(center);
+
+    for (i, (label, _)) in options.iter().enumerate() {
+        let btn_rect = btn_areas[i * 2];
+        let style = if i == selected { theme::bold_accent() } else { theme::muted() };
+
+        frame.render_widget(
+            Paragraph::new(format!("  {label}  "))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).border_style(style))
+                .style(style),
+            btn_rect,
+        );
+    }
 }
