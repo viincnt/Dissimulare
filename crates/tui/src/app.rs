@@ -32,6 +32,16 @@ pub enum Tone {
     Error,
 }
 
+/// A single line in a [`Screen::Message`] body. `Ok`/`Fail` get a colored
+/// checkmark/cross — for yes-or-no facts like "CA trusted" or "filter list
+/// downloaded" — instead of reading as plain text indistinguishable from
+/// everything else on the screen.
+pub enum StatusLine {
+    Plain(String),
+    Ok(String),
+    Fail(String),
+}
+
 /// The two user-editable domain lists share an identical shape (toggleable
 /// entries + add/remove/import/export), just backed by different
 /// `dissimulare_cli::commands` functions and config sections — this is the
@@ -113,7 +123,7 @@ pub enum Screen {
     Busy(String),
     /// Generic result/info screen: title + body lines + a tone, used for
     /// Setup/Status/Uninstall results and errors alike.
-    Message { title: String, lines: Vec<String>, tone: Tone },
+    Message { title: String, lines: Vec<StatusLine>, tone: Tone },
     /// `selected`: 0 = Yes, 1 = No. Defaults to No.
     ConfirmUninstall { selected: usize },
     /// Toggleable domain-list checklist — chaos exceptions or the bypass
@@ -156,6 +166,11 @@ impl App {
         }
     }
 
+    /// Whether the CA is currently trusted, for the persistent status bar.
+    pub fn ca_installed(&self) -> bool {
+        self.ca_installed
+    }
+
     fn refresh_ca_state(&mut self) {
         self.ca_installed = commands::ca_installed().unwrap_or(self.ca_installed);
     }
@@ -187,7 +202,7 @@ impl App {
     fn show_error(&mut self, title: &str, err: anyhow::Error) {
         self.screen = Screen::Message {
             title: title.to_string(),
-            lines: vec![format!("{err:#}")],
+            lines: vec![StatusLine::Plain(format!("{err:#}"))],
             tone: Tone::Error,
         };
     }
@@ -266,12 +281,10 @@ impl App {
         self.screen = Screen::Menu;
         let item_count = self.menu_items().len();
         match code {
-            // The menu is a row of side-by-side buttons, so it's navigated
-            // left/right rather than up/down.
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 self.menu_index = if self.menu_index == 0 { item_count - 1 } else { self.menu_index - 1 };
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 self.menu_index = (self.menu_index + 1) % item_count;
             }
             KeyCode::Enter => {
@@ -305,16 +318,24 @@ impl App {
             "Status" => match commands::status_info() {
                 Ok(info) => {
                     let mut lines = vec![
-                        format!("CA thumbprint (SHA-1): {}", info.ca_thumbprint),
-                        format!("CA trusted: {}", if info.ca_trusted { "yes" } else { "no" }),
-                        format!("Listen address: {}", info.listen_addr),
-                        format!("System proxy on start: {}", info.system_proxy_on_start),
+                        StatusLine::Plain(format!("CA thumbprint (SHA-1): {}", info.ca_thumbprint)),
+                        if info.ca_trusted {
+                            StatusLine::Ok("CA trusted".to_string())
+                        } else {
+                            StatusLine::Fail("CA trusted".to_string())
+                        },
+                        StatusLine::Plain(format!("Listen address: {}", info.listen_addr)),
+                        StatusLine::Plain(format!(
+                            "System proxy on start: {}",
+                            if info.system_proxy_on_start { "yes" } else { "no" }
+                        )),
                     ];
                     for (name, downloaded) in &info.filters {
-                        lines.push(format!(
-                            "Filter list {name}: {}",
-                            if *downloaded { "downloaded" } else { "missing" }
-                        ));
+                        lines.push(if *downloaded {
+                            StatusLine::Ok(format!("Filter list {name}"))
+                        } else {
+                            StatusLine::Fail(format!("Filter list {name}"))
+                        });
                     }
                     self.screen = Screen::Message { title: "Status".to_string(), lines, tone: Tone::Info };
                 }
@@ -348,14 +369,15 @@ impl App {
 
         match commands::complete_setup().await {
             Ok(outcome) => {
-                let mut lines = vec![format!("CA thumbprint (SHA-1): {}", outcome.ca_thumbprint)];
+                let mut lines = vec![StatusLine::Plain(format!("CA thumbprint (SHA-1): {}", outcome.ca_thumbprint))];
                 for (name, downloaded) in &outcome.filters {
-                    lines.push(format!(
-                        "Filter list {name}: {}",
-                        if *downloaded { "downloaded" } else { "missing" }
-                    ));
+                    lines.push(if *downloaded {
+                        StatusLine::Ok(format!("Filter list {name}"))
+                    } else {
+                        StatusLine::Fail(format!("Filter list {name}"))
+                    });
                 }
-                lines.push("Setup complete.".to_string());
+                lines.push(StatusLine::Plain("Setup complete.".to_string()));
                 self.screen = Screen::Message { title: "Setup".to_string(), lines, tone: Tone::Success };
             }
             Err(err) => self.show_error("Setup", err),
@@ -401,7 +423,7 @@ impl App {
         Ok(true)
     }
 
-    fn handle_message_key(&mut self, code: KeyCode, title: String, lines: Vec<String>, tone: Tone) {
+    fn handle_message_key(&mut self, code: KeyCode, title: String, lines: Vec<StatusLine>, tone: Tone) {
         match code {
             KeyCode::Enter | KeyCode::Esc | KeyCode::Char(' ') => self.back_to_menu(),
             _ => self.screen = Screen::Message { title, lines, tone },
@@ -418,17 +440,17 @@ impl App {
                     match commands::perform_uninstall() {
                         Ok(outcome) => {
                             let mut lines = vec![if outcome.ca_was_installed {
-                                "Root CA removed from the trust store.".to_string()
+                                StatusLine::Ok("Root CA removed from the trust store".to_string())
                             } else {
-                                "Root CA was not installed.".to_string()
+                                StatusLine::Plain("Root CA was not installed.".to_string())
                             }];
                             if outcome.system_proxy_cleared {
-                                lines.push("System proxy settings cleared.".to_string());
+                                lines.push(StatusLine::Ok("System proxy settings cleared".to_string()));
                             }
-                            lines.push(
+                            lines.push(StatusLine::Plain(
                                 "Local CA material removed. A fresh CA will be generated on the next setup."
                                     .to_string(),
-                            );
+                            ));
                             self.screen =
                                 Screen::Message { title: "Uninstall".to_string(), lines, tone: Tone::Success };
                         }
@@ -557,8 +579,8 @@ impl App {
             self.screen = Screen::Message {
                 title: "Proxy stopped".to_string(),
                 lines: vec![
-                    format!("Total requests: {}", snapshot.total_requests),
-                    format!("Blocked requests: {}", snapshot.blocked_requests),
+                    StatusLine::Plain(format!("Total requests: {}", snapshot.total_requests)),
+                    StatusLine::Plain(format!("Blocked requests: {}", snapshot.blocked_requests)),
                 ],
                 tone: Tone::Success,
             };

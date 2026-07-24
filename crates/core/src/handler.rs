@@ -97,7 +97,7 @@ impl HttpHandler for DissimulareHandler {
 
         if let Some(decision) = decision {
             if decision.blocked {
-                self.stats.record_blocked();
+                self.stats.record_blocked(&url);
                 tracing::debug!(url = %url, request_type, "blocked");
                 return synthetic_block_response(request_type, decision.redirect.as_deref()).into();
             }
